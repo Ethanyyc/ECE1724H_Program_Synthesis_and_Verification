@@ -32,7 +32,7 @@ We write the allowed inputs and the golden spec ourselves and never take them fr
 
 How we write the golden spec depends on the task. For tasks with **one correct answer**, such as min or clamp, we write a **golden program**: a short expression Z3 can reason about, such as `If(x < lo, lo, If(x > hi, hi, x))`. The intended output for each input is whatever the golden program returns, and the golden spec is just "the result equals the golden program's output". For tasks with **many correct answers**, such as "return any number larger than both inputs", there is no single right output and therefore no golden program, so we write the golden spec directly (`r > a and r > b`). Any output it allows counts as an intended output.
 
-Before using a golden program or golden spec, we test it on a few hand-picked inputs (or, for golden specs, outputs that should be accepted or rejected), and the other team member reviews it. These golden artifacts exist only for our benchmark. Section 4.2 explains how the approach works in practice, where they are not available.
+Before using a golden program or golden spec, we test it on a few hand-picked inputs (or, for golden specs, outputs that should be accepted or rejected), and the other team member reviews it. The golden spec and golden program are needed for this project so that we can tell whether each LLM-written spec is correct and evaluate our approach. In real work they are usually not available; we discuss this case in Section 4.2.
 
 **The LLM's spec.** The LLM writes a precondition and a postcondition as small Python functions that build Z3 formulas. For min, a good answer looks like this:
 
@@ -93,7 +93,7 @@ for every allowed input x:  if pre(x) holds, then post(x, p(x)) holds    -- p pa
 for some allowed input x:   p(x) is not an intended output                -- but p is wrong
 ```
 
-Here "not an intended output" means that `p(x)` differs from the golden program's output or, for tasks with many correct answers, breaks the golden spec. Only the second condition needs the golden program; the first compares `p` against the LLM's spec alone. In practice, where there is no golden program, a person would judge the second condition by looking at the program (Section 4.2).
+Here "not an intended output" means that `p(x)` differs from the golden program's output or, for tasks with many correct answers, breaks the golden spec. Only the second condition needs the golden program; the first compares `p` against the LLM's spec alone. In practice, where there is no golden program, the second condition is judged against partial ground truth such as existing tests, or by a person reviewing the program (Section 4.2).
 
 We give an LLM the task description and the spec and ask it for the **simplest plausible implementation that passes the spec but is wrong**, written in the same small expression language as the golden program so that Z3 can reason about it. The attacker runs as a guess-and-check loop, in the style of counterexample-guided synthesis (CEGIS), with the LLM doing the guessing:
 
@@ -165,7 +165,7 @@ With 30 tasks, this comes to at most about 400 LLM calls.
 
 We count an LLM-written spec as **correct** if Z3 proves it is logically equivalent to the golden spec, meaning that for every allowed input the two accept exactly the same outputs. This is a separate Z3 query, which gives us an objective ground truth.
 
-The four Z3 checks line up with this definition. A spec that is not equivalent to the golden spec must fail at least one of them: either its precondition rules out an allowed input (too strict), it rejects an intended output (too strong), or it accepts a wrong output (too weak). So whenever a spec is incorrect, the checks tell us how, and the repair loop in Section 2.4 only stops on a correct spec, unless Z3 answers "unknown".
+The four Z3 checks line up with this definition. A spec that is not equivalent to the golden spec must fail at least one of them: either its precondition rules out an allowed input (too strict), it rejects an intended output (too strong), or it accepts a wrong output (too weak). So whenever a spec is incorrect, the checks tell us how, and the repair loop in Section 2.4 stops before its round limit only when the spec is correct.
 
 ### 3.3 What data we collect
 
@@ -198,11 +198,13 @@ In Experiment 1, a **sample** is one task in one repeat. In Experiment 2, a **re
 - A program also stays readable on array or stateful tasks, where a single wrong output can be hard to interpret.
 - A whole program can potentially give the LLM more valuable information for rewriting the spec than one bad point. This is the question our repair experiment answers: Section 2.4 compares the two kinds of feedback, and RQ3 measures which one leads to more correct specs.
 
-### 4.2 If we already have a golden program, why do we need a spec?
+### 4.2 What if there is no golden spec?
 
-- In real work there is usually no golden program, since the spec is often written before any trusted code exists.
-- The golden programs and golden specs exist only for our benchmark, so that we can measure objectively whether each LLM-written spec is correct.
-- The attacker does not need them. In practice it would show a person a program the spec accepts ("your spec also allows `return lo`; is that OK?") and let them decide, much like reviewing a cover trace in hardware verification.
+- In real work there is usually no golden program or golden spec, since the spec is often written before any trusted code exists. Ours exist only to measure spec quality in our experiments.
+- However, industry projects usually already have **partial ground truth**: test cases and probes that give known-correct and known-wrong outputs for some inputs, plus properties the engineer cares about.
+- This partial ground truth can replace the golden spec, and most of the flow still works. The empty-precondition and too-strict checks only need the allowed inputs and are unchanged. The too-strong and too-weak checks compare the spec against the known-correct and known-wrong outputs instead of the golden spec. The attacker still uses Z3 to confirm that its program passes the spec on every input, and shows it is wrong where it disagrees with a known output or breaks a property.
+- We keep the benefit of program synthesis: the attacker still produces a readable wrong program that passes the spec. An engineer can review it quickly ("your spec also allows `return lo`; is that OK?"), or it can be fed back to an LLM to repair the spec.
+- The guarantee is weaker, though. Every problem found is still real, but only problems at the inputs the tests cover (or that break a property) can be found. Passing every check no longer proves the spec is correct, and repair may make the spec fit the tests while staying weak elsewhere. This is why our experiments use golden specs: we need them to measure true correctness, defect rates and repair success.
 
 ### 4.3 Are the tasks realistic enough?
 
